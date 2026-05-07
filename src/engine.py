@@ -10,6 +10,12 @@ class TimeoutException(BaseException):
 def alarm_handler(signum, frame):
     raise TimeoutException("Timeout exceeded!")
 
+def is_oom(e):
+    """True if `e` looks like an out-of-memory condition we must propagate.
+    Covers MemoryError directly and POSIX ENOMEM (errno 12) wrapped in OSError.
+    """
+    return isinstance(e, MemoryError) or (isinstance(e, OSError) and getattr(e, "errno", None) == 12)
+
 class Engine:
     def __init__(self, cfg, players):
         self.n_cards = cfg.get("n_cards", 104)
@@ -29,8 +35,9 @@ class Engine:
         assert len(players) == self.n_players
         self.players = players
         
-        # Optional override for hands (for duplicate tournaments)
+        # Optional override for hands and initial board (for duplicate tournaments)
         self.fixed_hands = cfg.get("fixed_hands", None)
+        self.fixed_board = cfg.get("fixed_board", None)
         
         # game state
         self.reset()
@@ -56,30 +63,48 @@ class Engine:
         self.timeout_counts = defaultdict(int)
         self.exception_counts = defaultdict(int)
         
-        # Card deck 1..n_cards
+        # Card deck 1..n_cards. Cards already committed via fixed_hands /
+        # fixed_board are excluded so we can never duplicate them.
         deck = list(range(1, self.n_cards + 1))
+        dealt = set()
+        if self.fixed_hands:
+            for hand in self.fixed_hands:
+                dealt.update(hand)
+        if self.fixed_board:
+            for row in self.fixed_board:
+                dealt.update(row)
+        if dealt:
+            deck = [c for c in deck if c not in dealt]
         self.rng.shuffle(deck)
-        
+
         # Check if we have enough cards
-        cards_required = self.n_players * self.n_rounds + self.board_size_y
+        cards_required = 0
+        if not self.fixed_hands:
+            cards_required += self.n_players * self.n_rounds
+        if not self.fixed_board:
+            cards_required += self.board_size_y
         if len(deck) < cards_required:
             raise ValueError(f"Not enough cards! Need {cards_required}, have {len(deck)}")
-        
-        # Board: list of rows (lists of cards)
-        self.board = []
-        for _ in range(self.board_size_y):
-            card = deck.pop()
-            self.board.append([card])
-            
+
+        if self.fixed_board:
+            if len(self.fixed_board) != self.board_size_y:
+                raise ValueError(f"fixed_board has {len(self.fixed_board)} rows, expected {self.board_size_y}")
+            self.board = [list(row) for row in self.fixed_board]
+        else:
+            self.board = []
+            for _ in range(self.board_size_y):
+                card = deck.pop()
+                self.board.append([card])
+
         # History: dynamic lists
         self.history_matrix = []
         self.board_history = []
         self.flags_matrix = []
         self.score_history = []
-        
+
         # Deal hands: each player gets n_rounds (usually 10) cards
         self.hands = []
-        
+
         if self.fixed_hands:
              # Use provided hands if available
              # Deepcopy to prevent modification of source
@@ -211,10 +236,8 @@ class Engine:
                     self.timeout_counts[p_idx] += 1
                     played_card = hand[0]
                     is_forced = True
-                except MemoryError:
-                    raise
                 except Exception as e:
-                    if isinstance(e, OSError) and getattr(e, "errno", None) == 12:
+                    if is_oom(e):
                         raise
                     if self.verbose:
                         print(f"Player {p_idx} crashed: {e}")
