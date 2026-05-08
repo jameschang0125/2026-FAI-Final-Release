@@ -1,10 +1,17 @@
 import importlib
-from src.engine import Engine
+from src.engine import Engine, silenced_if
 from copy import deepcopy
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from collections import defaultdict
 import itertools
+
+
+def _grading_mode(config):
+    """Pull grading_mode out of either top-level or tournament sub-config."""
+    return bool(config.get("grading_mode")
+                or config.get("tournament", {}).get("grading_mode"))
+
 
 def load_players(config, verbose=False):
     assert "players" in config, "Config must have a 'players' key"
@@ -13,28 +20,30 @@ def load_players(config, verbose=False):
     if verbose:
         print("--- Importing Players ---")
     imported_players = []
+    grading = _grading_mode(config)
 
     for i, player_conf in enumerate(config["players"]):
         try:
             path = player_conf["path"]
             cls_name = player_conf["class"]
-            
-            # 1. Import module
-            module = importlib.import_module(path)
-            
+
+            # 1. Import module (silence student import-time prints in grading mode)
+            with silenced_if(grading):
+                module = importlib.import_module(path)
+
             # 2. Get Class
             cls = getattr(module, cls_name)
-            
+
             # 3. Append class
             imported_players.append(cls)
-            
+
             if verbose:
                 print(f"Imported {cls.__name__} from {path}")
-            
+
         except Exception as e:
             print(f"Failed to import {cls_name} from {path} for player {i}:  {e}")
             raise e
-    
+
     return imported_players
 
 def _normalize_player_entries(entries, is_baseline):
@@ -68,6 +77,10 @@ def _preprocess_player_config(config):
         p["player_id"] = i
     config["players"] = merged_players
     config["baselines"] = baselines
+    # Mirror grading_mode into the engine sub-block so Engine sees it
+    # without having to peek at the top-level config.
+    if _grading_mode(config):
+        config.setdefault("engine", {})["grading_mode"] = True
     return config
 
 

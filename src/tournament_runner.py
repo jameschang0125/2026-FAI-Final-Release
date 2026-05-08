@@ -8,7 +8,7 @@ import math
 from collections import defaultdict
 from tqdm import tqdm
 from joblib import Parallel, delayed
-from src.engine import Engine, is_oom
+from src.engine import Engine, is_oom, silenced_if
 from src.game_utils import load_players, _preprocess_player_config
 
 class BaseTournamentRunner:
@@ -18,6 +18,7 @@ class BaseTournamentRunner:
         
         self.engine_config = self.config.get("engine", {})
         self.n_players_per_game = self.engine_config.get("n_players", 4)
+        self.grading_mode = bool(self.engine_config.get("grading_mode", False))
         
         self.tournament_config = self.config.get("tournament", {})
         if "use_permutations" in self.tournament_config:
@@ -180,10 +181,11 @@ class BaseTournamentRunner:
             game_players = []
             for seat, (p_cls, p_args) in enumerate(seat_resolutions):
                 try:
-                    if p_args is None:
-                        inst = p_cls(player_idx=seat)
-                    else:
-                        inst = p_cls(player_idx=seat, **p_args)
+                    with silenced_if(self.grading_mode):
+                        if p_args is None:
+                            inst = p_cls(player_idx=seat)
+                        else:
+                            inst = p_cls(player_idx=seat, **p_args)
                     # Reset global random state after each __init__ to prevent
                     # players from manipulating each other's random streams.
                     random.seed(None)

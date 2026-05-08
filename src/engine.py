@@ -1,8 +1,30 @@
+import contextlib
+import io
 import random
 import copy
 from collections import defaultdict
 import time
 import signal
+
+
+@contextlib.contextmanager
+def silenced_if(flag):
+    """Discard stdout when `flag` is truthy, pass through otherwise.
+
+    Used by Engine.play_round to suppress per-turn student print() spam under
+    grading_mode, and reused by load_players / tournament_runner around module
+    import and class instantiation. stderr is left alone — engine errors and
+    real warnings still surface.
+
+    Lives here (engine.py) so callers can `from src.engine import silenced_if`
+    without circular imports (game_utils already imports Engine).
+    """
+    if flag:
+        with contextlib.redirect_stdout(io.StringIO()):
+            yield
+    else:
+        yield
+
 
 class TimeoutException(BaseException):
     pass
@@ -27,6 +49,7 @@ class Engine:
         self.seed = cfg.get("seed", None)
         self.timeout = cfg.get("timeout", None)
         self.timeout_buffer = cfg.get("timeout_buffer", 0.5)
+        self.grading_mode = bool(cfg.get("grading_mode", False))
         self.rng = random.Random(self.seed)
         
         # Mapping from card number to score
@@ -228,7 +251,8 @@ class Engine:
                     random.seed(None)
                     # Pass copy of hand to prevent modification
                     # Pass DEEP copy of history to prevent modification
-                    played_card = player.action(hand.copy(), copy.deepcopy(history_state))
+                    with silenced_if(self.grading_mode):
+                        played_card = player.action(hand.copy(), copy.deepcopy(history_state))
                             
                 except TimeoutException:
                     if self.verbose:

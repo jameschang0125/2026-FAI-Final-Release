@@ -45,6 +45,44 @@ def compact_json_dumps(data):
         return '[' + ', '.join(items) + ']'
     return re.sub(r'\[\s*([^\[\]\{\}]+?)\s*\]', collapse, text)
 
+def apply_grading_mode(config):
+    """Pin every parallel-capable lib to 1 thread before any heavy import.
+
+    Triggered by `tournament.grading_mode: true` in the config (or its alias
+    `grading_mode` at the top level). When off, this is a no-op and torch
+    keeps its defaults.
+
+    The env vars must be set before numpy/torch are imported — that's why this
+    runs before the runner import below. Worker subprocesses spawned later via
+    fork inherit the env unchanged, so the setting propagates to every game.
+    """
+    flag = config.get("grading_mode") or config.get("tournament", {}).get("grading_mode", False)
+    if not flag:
+        return
+    pinned_env = {
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+    }
+    for k, v in pinned_env.items():
+        os.environ[k] = v
+    print(f"[grading_mode] env pinned: {', '.join(f'{k}={v}' for k, v in pinned_env.items())}")
+    try:
+        import torch
+        torch.set_num_threads(1)
+        try:
+            torch.set_num_interop_threads(1)
+        except RuntimeError as e:
+            # Already too late in this process — env vars still cap BLAS, and
+            # forked workers will pick up the value cleanly.
+            print(f"[grading_mode] torch interop already initialized: {e}")
+        print("[grading_mode] torch.set_num_threads(1) / set_num_interop_threads(1)")
+    except ImportError:
+        pass  # No torch installed — fine, env vars handle the BLAS side.
+
+
 def load_config(config_path):
     try:
         with open(config_path, 'r') as f:
@@ -85,7 +123,11 @@ def run():
     if not config:
         print("Error: No configuration provided. Please provide --config or the split config arguments.")
         sys.exit(1)
-            
+
+    # 1b. Apply grading mode (single-thread pin) if requested. Must run BEFORE
+    # importing the runner / numpy / torch so env-vars are seen at import time.
+    apply_grading_mode(config)
+
     # 2. Run Tournament
     try:
         t_type = config.get("tournament", {}).get("type", "combination")
