@@ -42,6 +42,7 @@ Settings that control the inner game mechanics:
 
 ### 3. `tournament`
 Settings specific to the `run_tournament.py` runner (ignored by `run_single_game.py`):
+*   `grading_mode`: Boolean (default: `false`). When `true`, pins `torch.set_num_threads(1)` (and related env vars like `OMP_NUM_THREADS`) so accidental thread-level parallelism is disabled, and suppresses per-game stdout so only the final standings are printed. This is the mode used during official evaluation.
 *   `type`: Type of tournament to run (`combination`, `random_partition`, or `grouped_random_partition`). **The `random_partition` tournament format will be used in final evaluations.**
 *   `duplication_mode`: String (`"permutations"`, `"cycle"`, or `"none"`). Determines how hands are duplicated to reduce RNG variance. `"permutations"` plays $N!$ games with all seat assignments, `"cycle"` plays $N$ games shifting hands, and `"none"` plays 1 game. (Legacy boolean `use_permutations` is also supported).
 *   `num_games_per_player` & `num_workers`: Used by `random_partition` to control the number of games played and parallel processing threads.
